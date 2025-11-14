@@ -25,10 +25,14 @@ MonkeyOCR: Document Parsing with a Structure-Recognition-Relation Triplet Paradi
 > Jiarui Zhang, Yuliang Liu, Zijun Wu, Guosheng Pang, Zhili Ye, Yupei Zhong, Junteng Ma, Tao Wei, Haiyang Xu, Weikai Chen, Zeen Wang, Qiangjun Ji, Fanxi Zhou, Qi Zhang, Yuanrui Hu, Jiahao Liu, Zhang Li, Ziyang Zhang, Qiang Liu, Xiang Bai <br>
 [![arXiv](https://img.shields.io/badge/Arxiv-b31b1b.svg?logo=arXiv)](https://arxiv.org/pdf/2511.10390) 
 [![Demo](https://img.shields.io/badge/Demo-blue)](https://aiwrite.wps.cn/pdf/parse/web/)
-> 
+>
 
+	
 ## News 
 * ```2025.11.14 ``` 🚀 We release [MonkeyOCR-v1.5](https://arxiv.org/abs/2511.10390) Technical Report, achieving the best document parsing performance to date. [Demo](https://aiwrite.wps.cn/pdf/parse/web/).
+<p align="center">
+<a href="https://pic1.imgdb.cn/item/6916e7fe3203f7be00038681"><img src="https://pic1.imgdb.cn/item/6916e7fe3203f7be00038681.png" alt="6916e7fe3203f7be00038681.png"  width=800 border="0" /></a>
+<p>
 * ```2025.07.10 ``` 🚀 We release [MonkeyOCR-pro-1.2B](https://huggingface.co/echo840/MonkeyOCR-pro-1.2B), — a leaner and faster version model that outperforms our previous 3B version in accuracy, speed, and efficiency.
 * ```2025.06.12 ``` 🚀 The model’s trending on [Hugging Face](https://huggingface.co/models?sort=trending). Thanks for the love!
 * ```2025.06.05 ``` 🚀 We release [MonkeyOCR](https://huggingface.co/echo840/MonkeyOCR), an English and Chinese documents parsing model.
