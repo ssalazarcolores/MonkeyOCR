@@ -1190,7 +1190,7 @@ Here are the evaluation results of our model on OmniDocBench. MonkeyOCR-3B uses 
 
 ## Visualization Demo
 
-Get a Quick Hands-On Experience with Our Demo:  http://vlrlabmonkey.xyz:7685 (The latest model is available for selection)
+Get a Quick Hands-On Experience with Our Demo:  http://vlrlabmonkey.xyz:8891 (The latest model is available for selection)
 
 > Our demo is simple and easy to use:
 >
