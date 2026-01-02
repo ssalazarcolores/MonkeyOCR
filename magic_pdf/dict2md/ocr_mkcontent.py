@@ -160,13 +160,18 @@ def ocr_mk_markdown_with_para_core_v2(paras_of_layout,
         elif para_type == BlockType.Title:
             title_level = get_title_level(para_block)
             title_text = merge_para_with_text(para_block)
-            para_text = f'{"#" * title_level} {title_text}'.replace('\n', f'\n{"#" * title_level}')
+
+            # Nivel 0 = no es un header real, tratar como texto normal
+            if title_level == 0:
+                para_text = title_text  # Sin marcado de header
+            else:
+                para_text = f'{"#" * title_level} {title_text}'.replace('\n', f'\n{"#" * title_level}')
 
             # Recolectar metadata del header para corrección posterior con LLM
             if collect_headers:
                 metadata = _extract_title_metadata(para_block, page_num)
                 metadata['level_heuristic'] = title_level
-                metadata['markdown'] = para_text.split('\n')[0]  # Primera línea del markdown
+                metadata['markdown'] = para_text.split('\n')[0] if title_level > 0 else ''
                 _headers_metadata.append(metadata)
         elif para_type == BlockType.InterlineEquation:
             para_text = merge_para_with_text(para_block)
@@ -416,10 +421,11 @@ def union_make(pdf_info_dict: list,
 
 def get_title_level(block):
     """
-    Determina el nivel de un título (1-4) para generar markdown.
+    Determina el nivel de un título (0-4) para generar markdown.
 
     Heurísticas para papers científicos:
-    - Nivel 1: Título del paper, Abstract, References, secciones principales (1., 2., I., II.)
+    - Nivel 0: NO son headers (Figure X, Table X, captions, metadata, ruido)
+    - Nivel 1: Secciones principales (Abstract, I. Introduction, 1. Methods, etc.)
     - Nivel 2: Subsecciones (1.1, 2.1, II.A, II.1, A., Problem Statement, etc.)
     - Nivel 3: Sub-subsecciones (1.1.1, 1), 2), Definition 1, Theorem 2, etc.)
     - Nivel 4: Sub-sub-subsecciones (1.1.1.1, muy raras)
@@ -431,7 +437,7 @@ def get_title_level(block):
     # Si el bloque ya tiene nivel asignado (no es el default 1), usarlo
     if 'level' in block and block['level'] != 1:
         level = block['level']
-        return max(1, min(4, level))
+        return max(0, min(4, level))
 
     # Extraer texto del título y calcular altura promedio de spans
     title_text = ''
@@ -456,6 +462,79 @@ def get_title_level(block):
         return 1
 
     title_lower = title_text.lower().strip()
+
+    # === NIVEL 0: NO SON HEADERS REALES (eliminar) ===
+
+    not_headers_patterns = [
+        # Captions de figuras y tablas
+        r'^fig(ure|\.)\s*\d+',           # Figure 1, Fig. 1, Figure 2:
+        r'^figura\s*\d+',                 # Figura 1
+        r'^tab(le|\.)\s*\d+',             # Table 1, Tab. 1
+        r'^tabla\s*\d+',                  # Tabla 1
+        r'^chart\s*\d+',                  # Chart 1
+        r'^graph\s*\d+',                  # Graph 1
+        r'^plate\s*\d+',                  # Plate 1
+        r'^listing\s*\d+',                # Listing 1 (código)
+        r'^code\s*\d+',                   # Code 1
+        r'^equation\s*\d+',               # Equation 1
+        r'^eq\.\s*\d+',                   # Eq. 1
+
+        # Metadata y ruido de papers
+        r'^©',                             # Copyright
+        r'^\(c\)\s*\d{4}',                # (c) 2024
+        r'^copyright',                     # Copyright notice
+        r'^doi[:\s]',                      # DOI: 10.1234/...
+        r'^https?://',                     # URLs
+        r'^www\.',                         # www.example.com
+        r'^arxiv[:\s]',                    # arXiv: 1234.5678
+        r'^\d{4}\s+(ieee|acm|springer)',  # "2024 IEEE..."
+        r'^ieee\s',                        # "IEEE Trans..."
+        r'^acm\s',                         # "ACM ..."
+        r'^springer\s',                    # "Springer ..."
+        r'^elsevier\s',                    # "Elsevier ..."
+        r'^issn[:\s]',                     # ISSN:
+        r'^isbn[:\s]',                     # ISBN:
+        r'^vol(ume)?\.?\s*\d+',           # Volume 1, Vol. 1
+        r'^issue\s*\d+',                   # Issue 1
+        r'^pp\.?\s*\d+',                   # pp. 1-10
+        r'^pages?\s*\d+',                  # Page 1, Pages 1-10
+        r'^received[:\s]',                 # Received: date
+        r'^accepted[:\s]',                 # Accepted: date
+        r'^published[:\s]',                # Published: date
+        r'^revised[:\s]',                  # Revised: date
+        r'^submitted[:\s]',                # Submitted: date
+        r'^editor[:\s]',                   # Editor:
+        r'^keywords?[:\s]',                # Keywords:
+        r'^corresponding\s*author',        # Corresponding author
+        r'^e-?mail[:\s]',                  # Email:, E-mail:
+        r'^author\s*contributions?',       # Author contributions
+        r'^conflict\s*of\s*interest',      # Conflict of interest
+        r'^data\s*availability',           # Data availability
+        r'^code\s*availability',           # Code availability
+        r'^funding[:\s]',                  # Funding:
+        r'^grant[:\s]',                    # Grant:
+        r'^supported\s*by',                # Supported by
+        r'^\*\s*(corresponding|equal)',    # * Corresponding author
+        r'^†\s*equal',                     # † Equal contribution
+
+        # Afiliaciones (detectar patrones comunes)
+        r'^\d+\s*(department|school|university|institute|laboratory|lab|center|centre)',
+        r'^(department|school|faculty)\s*of\s',
+
+        # Headers de página/columna
+        r'^page\s*\d+',                    # Page 1
+        r'^\d+\s*of\s*\d+',                # 1 of 10
+        r'^running\s*head',                # Running head
+
+        # Fragmentos muy cortos que probablemente son ruido
+        r'^[a-z]$',                        # Single lowercase letter
+        r'^\d+$',                          # Solo números
+        r'^[.\-_]+$',                      # Solo puntuación
+    ]
+
+    for pattern in not_headers_patterns:
+        if re.match(pattern, title_lower):
+            return 0  # Marcar para eliminar
 
     # === NIVEL 1: SECCIONES PRINCIPALES ===
 
@@ -653,13 +732,7 @@ def get_title_level(block):
         r'^case\s*\d+',
         r'^caso\s*\d+',
         r'^case\s+[ivx]+',                  # Case i, Case ii
-        # Figuras y tablas (cuando aparecen como título)
-        r'^figure\s*\d+',
-        r'^figura\s*\d+',
-        r'^table\s*\d+',
-        r'^tabla\s*\d+',
-        r'^fig\.\s*\d+',
-        r'^tab\.\s*\d+',
+        # Nota: Figure/Table ahora se detectan como nivel 0 (no headers)
     ]
 
     for pattern in formal_structure_patterns:
