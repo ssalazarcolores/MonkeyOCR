@@ -58,6 +58,10 @@ services:
     tty: true
     ports:
       - "7860:7860"
+    volumes:
+      - model_data:/app/MonkeyOCR/model_weight
+      # Montar código modificado para desarrollo
+      - ../magic_pdf:/app/MonkeyOCR/magic_pdf:ro
 
   monkeyocr-api:
     <<: *monkeyocr-base

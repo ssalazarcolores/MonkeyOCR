@@ -6,7 +6,7 @@ from typing import Callable
 from magic_pdf.config.make_content_config import DropMode, MakeMode
 from magic_pdf.data.data_reader_writer import DataWriter
 from magic_pdf.data.dataset import Dataset
-from magic_pdf.dict2md.ocr_mkcontent import union_make
+from magic_pdf.dict2md.ocr_mkcontent import union_make, get_headers_metadata
 from magic_pdf.libs.draw_bbox import (draw_layout_bbox, draw_line_sort_bbox,
                                       draw_span_bbox)
 from magic_pdf.libs.json_compressor import JsonCompressor
@@ -52,6 +52,7 @@ class PipeResultLLM:
         img_dir_or_bucket_prefix: str,
         drop_mode=DropMode.NONE,
         md_make_mode=MakeMode.MM_MD,
+        save_headers_metadata: bool = True,
     ):
         """Dump The Markdown.
 
@@ -61,12 +62,22 @@ class PipeResultLLM:
             img_dir_or_bucket_prefix (str): The s3 bucket prefix or local file directory which used to store the figure
             drop_mode (str, optional): Drop strategy when some page which is corrupted or inappropriate. Defaults to DropMode.NONE.
             md_make_mode (str, optional): The content Type of Markdown be made. Defaults to MakeMode.MM_MD.
+            save_headers_metadata (bool, optional): Whether to save headers metadata JSON. Defaults to True.
         """
 
         md_content = self.get_markdown(
             img_dir_or_bucket_prefix, drop_mode=drop_mode, md_make_mode=md_make_mode
         )
         writer.write_string(file_path, md_content)
+
+        # Guardar metadata de headers para corrección posterior con LLM
+        if save_headers_metadata:
+            headers_metadata = get_headers_metadata()
+            if headers_metadata:
+                # Generar nombre del archivo JSON basado en el nombre del markdown
+                headers_file_path = file_path.replace('.md', '_headers.json')
+                headers_json = json.dumps(headers_metadata, indent=2, ensure_ascii=False)
+                writer.write_string(headers_file_path, headers_json)
 
     def get_content_list(
         self,

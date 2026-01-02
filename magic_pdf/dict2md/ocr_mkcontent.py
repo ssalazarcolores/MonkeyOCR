@@ -23,8 +23,90 @@ def __is_hyphen_at_line_end(line):
     return bool(re.search(r'[A-Za-z]+-\s*$', line))
 
 
+# Variable global para recolectar metadata de headers durante el procesamiento
+_headers_metadata = []
+
+
+def reset_headers_metadata():
+    """Resetea la lista de metadata de headers."""
+    global _headers_metadata
+    _headers_metadata = []
+
+
+def get_headers_metadata():
+    """Retorna la metadata de headers recolectada."""
+    global _headers_metadata
+    return _headers_metadata.copy()
+
+
+def _extract_title_metadata(block, page_num=0):
+    """
+    Extrae metadata visual de un bloque de título para corrección posterior con LLM.
+
+    Returns:
+        dict con: text, font_height, bbox, page, block_bbox, position_ratio
+    """
+    from magic_pdf.config.ocr_content_type import ContentType
+
+    title_text = ''
+    span_heights = []
+    span_bboxes = []
+
+    for line in block.get('lines', []):
+        for span in line.get('spans', []):
+            if span.get('type') == ContentType.Text:
+                title_text += span.get('content', '')
+                bbox = span.get('bbox', [])
+                if len(bbox) >= 4:
+                    height = bbox[3] - bbox[1]
+                    if height > 0:
+                        span_heights.append(height)
+                        span_bboxes.append(bbox)
+
+    title_text = title_text.strip()
+    avg_font_height = sum(span_heights) / len(span_heights) if span_heights else 0
+
+    # Calcular bbox del bloque completo
+    block_bbox = block.get('bbox', [])
+    if not block_bbox and span_bboxes:
+        # Calcular bbox desde spans
+        x0 = min(b[0] for b in span_bboxes)
+        y0 = min(b[1] for b in span_bboxes)
+        x1 = max(b[2] for b in span_bboxes)
+        y1 = max(b[3] for b in span_bboxes)
+        block_bbox = [x0, y0, x1, y1]
+
+    # Calcular posición relativa en la página
+    page_size = block.get('page_size', [])
+    position_ratio = 0.5  # default: medio de la página
+    if page_size and len(page_size) >= 2 and page_size[1] > 0 and block_bbox and len(block_bbox) >= 4:
+        # Posición vertical relativa (0=top, 1=bottom)
+        position_ratio = block_bbox[1] / page_size[1]
+
+    return {
+        'text': title_text,
+        'font_height': round(avg_font_height, 2),
+        'block_bbox': block_bbox,
+        'page': page_num,
+        'position_ratio': round(position_ratio, 3),
+        'page_size': page_size
+    }
+
+
 def ocr_mk_mm_markdown_with_para_and_pagination(pdf_info_dict: list,
-                                                img_buket_path):
+                                                img_buket_path,
+                                                collect_headers=True):
+    """
+    Genera markdown con paginación y opcionalmente recolecta metadata de headers.
+
+    Args:
+        pdf_info_dict: Lista de información de páginas del PDF
+        img_buket_path: Ruta base para imágenes
+        collect_headers: Si True, recolecta metadata de headers (usar get_headers_metadata() después)
+    """
+    if collect_headers:
+        reset_headers_metadata()
+
     markdown_with_para_and_pagination = []
     page_no = 0
     for page_info in pdf_info_dict:
@@ -39,7 +121,8 @@ def ocr_mk_mm_markdown_with_para_and_pagination(pdf_info_dict: list,
             page_no += 1
             continue
         page_markdown = ocr_mk_markdown_with_para_core_v2(
-            paras_of_layout, 'mm', img_buket_path)
+            paras_of_layout, 'mm', img_buket_path,
+            page_num=page_no, collect_headers=collect_headers)
         markdown_with_para_and_pagination.append({
             'page_no':
                 page_no,
@@ -53,7 +136,21 @@ def ocr_mk_mm_markdown_with_para_and_pagination(pdf_info_dict: list,
 def ocr_mk_markdown_with_para_core_v2(paras_of_layout,
                                       mode,
                                       img_buket_path='',
+                                      page_num=0,
+                                      collect_headers=True,
                                       ):
+    """
+    Procesa bloques de párrafos y genera markdown.
+
+    Args:
+        paras_of_layout: Lista de bloques de párrafos
+        mode: 'mm' para multimedia, 'nlp' para solo texto
+        img_buket_path: Ruta base para imágenes
+        page_num: Número de página actual (para metadata de headers)
+        collect_headers: Si True, recolecta metadata de headers en _headers_metadata
+    """
+    global _headers_metadata
+
     page_markdown = []
     for para_block in paras_of_layout:
         para_text = ''
@@ -62,7 +159,15 @@ def ocr_mk_markdown_with_para_core_v2(paras_of_layout,
             para_text = merge_para_with_text(para_block)
         elif para_type == BlockType.Title:
             title_level = get_title_level(para_block)
-            para_text = f'{"#" * title_level} {merge_para_with_text(para_block)}'.replace('\n', f'\n{"#" * title_level}')
+            title_text = merge_para_with_text(para_block)
+            para_text = f'{"#" * title_level} {title_text}'.replace('\n', f'\n{"#" * title_level}')
+
+            # Recolectar metadata del header para corrección posterior con LLM
+            if collect_headers:
+                metadata = _extract_title_metadata(para_block, page_num)
+                metadata['level_heuristic'] = title_level
+                metadata['markdown'] = para_text.split('\n')[0]  # Primera línea del markdown
+                _headers_metadata.append(metadata)
         elif para_type == BlockType.InterlineEquation:
             para_text = merge_para_with_text(para_block)
         elif para_type == BlockType.Image:
@@ -245,7 +350,21 @@ def union_make(pdf_info_dict: list,
                make_mode: str,
                drop_mode: str,
                img_buket_path: str = '',
+               collect_headers: bool = True,
                ):
+    """
+    Función principal para generar markdown desde PDF.
+
+    Args:
+        pdf_info_dict: Información del PDF
+        make_mode: Modo de generación (MM_MD, NLP_MD, STANDARD_FORMAT)
+        drop_mode: Modo de manejo de páginas a descartar
+        img_buket_path: Ruta base para imágenes
+        collect_headers: Si True, recolecta metadata de headers (usar get_headers_metadata() después)
+    """
+    if collect_headers:
+        reset_headers_metadata()
+
     output_content = []
     for page_info in pdf_info_dict:
         drop_reason_flag = False
@@ -267,16 +386,18 @@ def union_make(pdf_info_dict: list,
                 raise Exception('drop_mode can not be null')
 
         paras_of_layout = page_info.get('para_blocks')
-        page_idx = page_info.get('page_idx')
+        page_idx = page_info.get('page_idx', 0)
         if not paras_of_layout:
             continue
         if make_mode == MakeMode.MM_MD:
             page_markdown = ocr_mk_markdown_with_para_core_v2(
-                paras_of_layout, 'mm', img_buket_path)
+                paras_of_layout, 'mm', img_buket_path,
+                page_num=page_idx, collect_headers=collect_headers)
             output_content.extend(page_markdown)
         elif make_mode == MakeMode.NLP_MD:
             page_markdown = ocr_mk_markdown_with_para_core_v2(
-                paras_of_layout, 'nlp')
+                paras_of_layout, 'nlp',
+                page_num=page_idx, collect_headers=collect_headers)
             output_content.extend(page_markdown)
         elif make_mode == MakeMode.STANDARD_FORMAT:
             for para_block in paras_of_layout:
@@ -294,9 +415,299 @@ def union_make(pdf_info_dict: list,
 
 
 def get_title_level(block):
-    title_level = block.get('level', 1)
-    if title_level > 4:
-        title_level = 4
-    elif title_level < 1:
-        title_level = 1
-    return title_level
+    """
+    Determina el nivel de un título (1-4) para generar markdown.
+
+    Heurísticas para papers científicos:
+    - Nivel 1: Título del paper, Abstract, References, secciones principales (1., 2., I., II.)
+    - Nivel 2: Subsecciones (1.1, 2.1, II.A, II.1, A., Problem Statement, etc.)
+    - Nivel 3: Sub-subsecciones (1.1.1, 1), 2), Definition 1, Theorem 2, etc.)
+    - Nivel 4: Sub-sub-subsecciones (1.1.1.1, muy raras)
+
+    También usa información visual del bbox para inferir tamaño de fuente.
+    """
+    import re
+
+    # Si el bloque ya tiene nivel asignado (no es el default 1), usarlo
+    if 'level' in block and block['level'] != 1:
+        level = block['level']
+        return max(1, min(4, level))
+
+    # Extraer texto del título y calcular altura promedio de spans
+    title_text = ''
+    span_heights = []
+    for line in block.get('lines', []):
+        for span in line.get('spans', []):
+            if span.get('type') == ContentType.Text:
+                title_text += span.get('content', '')
+                # Calcular altura del span desde bbox
+                bbox = span.get('bbox', [])
+                if len(bbox) >= 4:
+                    height = bbox[3] - bbox[1]
+                    if height > 0:
+                        span_heights.append(height)
+
+    title_text = title_text.strip()
+
+    # Calcular altura promedio de fuente (inferida del bbox)
+    avg_font_height = sum(span_heights) / len(span_heights) if span_heights else 0
+
+    if not title_text:
+        return 1
+
+    title_lower = title_text.lower().strip()
+
+    # === NIVEL 1: SECCIONES PRINCIPALES ===
+
+    # Palabras clave que siempre son nivel 1
+    level1_keywords = [
+        # Estructura estándar de papers
+        r'^abstract$',
+        r'^resumen$',
+        r'^references?$',
+        r'^bibliograf[ií]a$',
+        r'^acknowledg[e]?ments?$',
+        r'^agradecimientos$',
+        r'^appendix',
+        r'^ap[ée]ndice',
+        r'^supplementary',
+        r'^conclusion[s]?$',
+        r'^discussion$',
+        r'^introduction$',
+        r'^methods?$',
+        r'^methodology$',
+        r'^results?$',
+        r'^related\s*work',
+        r'^background$',
+        r'^preliminaries$',
+        r'^overview$',
+        r'^motivation$',
+        r'^summary$',
+        # Índices y glosarios
+        r'^index$',
+        r'^glossary$',
+        r'^nomenclature$',
+        r'^abbreviations?$',
+        r'^notation$',
+    ]
+
+    for pattern in level1_keywords:
+        if re.match(pattern, title_lower):
+            return 1
+
+    # === NIVEL 2: SUBSECCIONES COMUNES ===
+
+    # Palabras clave que típicamente son nivel 2 (subsecciones)
+    level2_keywords = [
+        # Metodología
+        r'^problem\s*(statement|formulation|definition)',
+        r'^experimental\s*(setup|design|results|evaluation)',
+        r'^implementation\s*(details?)?',
+        r'^data\s*(collection|analysis|description|preprocessing)',
+        r'^evaluation\s*(metrics?|criteria|protocol)',
+        r'^training\s*(details?|procedure|setup)',
+        r'^model\s*(architecture|description|overview)',
+        r'^network\s*architecture',
+        r'^loss\s*function',
+        r'^objective\s*function',
+        r'^optimization',
+        # Análisis
+        r'^ablation\s*(study|analysis|experiments?)',
+        r'^sensitivity\s*analysis',
+        r'^comparative\s*(study|analysis)',
+        r'^quantitative\s*(results?|analysis|evaluation)',
+        r'^qualitative\s*(results?|analysis|evaluation)',
+        r'^statistical\s*analysis',
+        r'^error\s*analysis',
+        # Limitaciones y futuro
+        r'^limitations?$',
+        r'^future\s*work',
+        r'^ethical\s*(considerations?|statement)',
+        r'^broader\s*impact',
+        # Otros
+        r'^contributions?$',
+        r'^overview$',
+        r'^notation$',
+        r'^definitions?$',
+        r'^assumptions?$',
+        r'^setup$',
+        r'^datasets?$',
+        r'^baselines?$',
+        r'^metrics?$',
+        r'^hyperparameters?$',
+        r'^parameter\s*settings?',
+    ]
+
+    for pattern in level2_keywords:
+        if re.match(pattern, title_lower):
+            return 2
+
+    # === PATRONES DE NUMERACIÓN ===
+
+    # Símbolo de sección § (papers europeos/matemáticos)
+    section_symbol_patterns = [
+        (r'^§\s*\d+\.\d+\.\d+', 3),      # §1.2.3
+        (r'^§\s*\d+\.\d+', 2),            # §1.2
+        (r'^§\s*\d+', 1),                 # §1
+    ]
+
+    for pattern, level in section_symbol_patterns:
+        if re.match(pattern, title_text):
+            return level
+
+    # Numeración decimal (más común en papers)
+    # Más restrictivo: requiere que después del número haya punto o texto
+    decimal_patterns = [
+        (r'^\d+\.\d+\.\d+\.\d+[\.\s]', 4),   # 1.2.3.4. o 1.2.3.4 texto
+        (r'^\d+\.\d+\.\d+[\.\s]', 3),         # 1.2.3. o 1.2.3 texto
+        (r'^\d+\.\d+[\.\s]', 2),               # 1.2. o 1.2 texto
+        (r'^\d+\.\s+[A-Z]', 1),                # 1. Texto (sección principal)
+        (r'^\d+\s+[A-Z]', 1),                  # 1 Texto (sin punto, también válido)
+    ]
+
+    for pattern, level in decimal_patterns:
+        if re.match(pattern, title_text):
+            return level
+
+    # Numeración romana (IEEE style)
+    roman_patterns = [
+        (r'^[IVX]+\.[A-Z]\.\d+', 3),      # II.A.1
+        (r'^[IVX]+\.[A-Z]\.?[\s\.]', 2),  # II.A o II.A.
+        (r'^[IVX]+\.\d+', 2),              # II.1
+        (r'^[IVX]+\.?\s+[A-Z]', 1),        # II. Texto o II Texto
+    ]
+
+    for pattern, level in roman_patterns:
+        if re.match(pattern, title_text):
+            return level
+
+    # Letras mayúsculas (subsecciones)
+    letter_upper_patterns = [
+        (r'^[A-Z]\.\d+[\.\s]', 2),         # A.1. o A.1 texto
+        (r'^\([A-Z]\)\s', 2),               # (A) texto
+        (r'^[A-Z]\.?\s+[A-Z]', 2),          # A. Texto o A Texto
+    ]
+
+    for pattern, level in letter_upper_patterns:
+        if re.match(pattern, title_text):
+            return level
+
+    # Letras minúsculas y números con paréntesis (sub-subsecciones)
+    paren_patterns = [
+        (r'^\d+\)\s', 3),                   # 1) texto
+        (r'^\(\d+\)\s', 3),                 # (1) texto
+        (r'^[a-z]\)\s', 3),                 # a) texto
+        (r'^\([a-z]\)\s', 3),               # (a) texto
+        (r'^[ivx]+\)\s', 3),                # i) ii) iii) (romanos minúscula)
+        (r'^\([ivx]+\)\s', 3),              # (i) (ii) (iii)
+    ]
+
+    for pattern, level in paren_patterns:
+        if re.match(pattern, title_text, re.IGNORECASE):
+            return level
+
+    # === ESTRUCTURAS MATEMÁTICAS/FORMALES (nivel 3) ===
+
+    formal_structure_patterns = [
+        # Teoremas y similares
+        r'^theorem\s*\d*',
+        r'^teorema\s*\d*',
+        r'^lemma\s*\d*',
+        r'^lema\s*\d*',
+        r'^corollary\s*\d*',
+        r'^corolario\s*\d*',
+        r'^proposition\s*\d*',
+        r'^proposici[oó]n\s*\d*',
+        r'^conjecture\s*\d*',
+        r'^conjetura\s*\d*',
+        r'^claim\s*\d*',
+        r'^property\s*\d*',
+        r'^propiedad\s*\d*',
+        # Definiciones y ejemplos
+        r'^definition\s*\d*',
+        r'^definici[oó]n\s*\d*',
+        r'^example\s*\d*',
+        r'^ejemplo\s*\d*',
+        r'^remark\s*\d*',
+        r'^observaci[oó]n\s*\d*',
+        r'^note\s*\d*',
+        r'^nota\s*\d*',
+        # Algoritmos y procedimientos
+        r'^algorithm\s*\d*',
+        r'^algoritmo\s*\d*',
+        r'^procedure\s*\d*',
+        r'^procedimiento\s*\d*',
+        r'^protocol\s*\d*',
+        r'^protocolo\s*\d*',
+        # Pruebas
+        r'^proof',
+        r'^demostraci[oó]n',
+        r'^prueba',
+        # Pasos y casos
+        r'^step\s*\d+',
+        r'^paso\s*\d+',
+        r'^stage\s*\d+',
+        r'^etapa\s*\d+',
+        r'^phase\s*\d+',
+        r'^fase\s*\d+',
+        r'^case\s*\d+',
+        r'^caso\s*\d+',
+        r'^case\s+[ivx]+',                  # Case i, Case ii
+        # Figuras y tablas (cuando aparecen como título)
+        r'^figure\s*\d+',
+        r'^figura\s*\d+',
+        r'^table\s*\d+',
+        r'^tabla\s*\d+',
+        r'^fig\.\s*\d+',
+        r'^tab\.\s*\d+',
+    ]
+
+    for pattern in formal_structure_patterns:
+        if re.match(pattern, title_lower):
+            return 3
+
+    # === DETECCIÓN POR CARACTERÍSTICAS DEL TEXTO ===
+
+    # Si el título es muy corto (1-3 palabras) y empieza con mayúscula,
+    # probablemente es una sección principal
+    words = title_text.split()
+    if len(words) <= 3 and title_text[0].isupper():
+        # Verificar que no sea una oración (no termina en punto o tiene verbos comunes)
+        if not title_text.endswith('.') and not any(v in title_lower for v in [' is ', ' are ', ' was ', ' were ', ' the ', ' a ']):
+            return 1
+
+    # === DETECCIÓN POR TAMAÑO DE FUENTE (inferido de bbox) ===
+
+    # Usar la altura del bbox como proxy del tamaño de fuente
+    # Heurísticas basadas en papers típicos (Letter/A4, ~300 DPI):
+    # - Títulos principales (nivel 1): altura > 18 px
+    # - Subsecciones (nivel 2): altura 14-18 px
+    # - Sub-subsecciones (nivel 3): altura 10-14 px
+    # - Texto normal: altura < 12 px
+
+    # También considerar el tamaño relativo a la página si está disponible
+    page_size = block.get('page_size', [])
+    if page_size and len(page_size) >= 2 and page_size[1] > 0:
+        # Normalizar altura respecto a la página (típicamente ~800-1000 px)
+        relative_height = avg_font_height / page_size[1]
+        # Títulos muy grandes (>2.5% de la página) son nivel 1
+        if relative_height > 0.025:
+            return 1
+        # Títulos grandes (1.8-2.5% de la página) son nivel 2
+        elif relative_height > 0.018:
+            return 2
+        # Títulos medianos (1.2-1.8% de la página) son nivel 3
+        elif relative_height > 0.012:
+            return 3
+
+    # Fallback: usar altura absoluta si no hay page_size
+    if avg_font_height > 0:
+        if avg_font_height > 22:
+            return 1  # Fuente muy grande = título principal
+        elif avg_font_height > 16:
+            return 2  # Fuente grande = subsección
+        elif avg_font_height > 12:
+            return 3  # Fuente mediana = sub-subsección
+
+    # Default: nivel 1 (título del paper o sección sin numerar)
+    return 1
