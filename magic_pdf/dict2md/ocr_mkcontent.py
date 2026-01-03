@@ -664,7 +664,7 @@ def get_title_level(block):
     letter_upper_patterns = [
         (r'^[A-Z]\.\d+[\.\s]', 2),         # A.1. o A.1 texto
         (r'^\([A-Z]\)\s', 2),               # (A) texto
-        (r'^[A-Z]\.?\s+[A-Z]', 2),          # A. Texto o A Texto
+        (r'^[A-Z]\.?\s+[A-Za-z]', 2),       # A. Texto o A. texto (permite minúscula inicial)
     ]
 
     for pattern, level in letter_upper_patterns:
