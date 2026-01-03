@@ -651,15 +651,13 @@ def get_title_level(block):
             return level
 
     # Numeración decimal - DESPUÉS de romanos
-    # Si hay romanos para secciones principales, los números solos son subsecciones
     decimal_patterns = [
         (r'^\d+\.\d+\.\d+\.\d+[\.\s]', 4),   # 1.2.3.4. o 1.2.3.4 texto
         (r'^\d+\.\d+\.\d+[\.\s]', 3),         # 1.2.3. o 1.2.3 texto
         (r'^\d+\.\d+[\.\s]', 2),               # 1.2. o 1.2 texto
-        # Números solos (1., 2., etc.) ahora son nivel 2 por defecto
-        # Papers con romanos usan números como subsecciones
-        (r'^\d+\.\s+[A-Z]', 2),                # 1. Texto -> nivel 2 (subsección)
-        (r'^\d+\s+[A-Z]', 2),                  # 1 Texto -> nivel 2 (subsección)
+        # Números solos son nivel 1 por defecto (backend ajusta si hay romanos)
+        (r'^\d+\.\s+[A-Z]', 1),                # 1. Texto (sección principal)
+        (r'^\d+\s+[A-Z]', 1),                  # 1 Texto (sin punto)
     ]
 
     for pattern, level in decimal_patterns:
