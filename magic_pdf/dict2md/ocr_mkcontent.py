@@ -517,6 +517,10 @@ def get_title_level(block):
         r'^\*\s*(corresponding|equal)',    # * Corresponding author
         r'^†\s*equal',                     # † Equal contribution
 
+        # Abstract con contenido inline (no es header puro)
+        r'^abstract[\.\:\-]\s+\w',          # "Abstract. texto..." o "Abstract: texto..."
+        r'^resumen[\.\:\-]\s+\w',           # "Resumen. texto..."
+
         # Afiliaciones (detectar patrones comunes)
         r'^\d+\s*(department|school|university|institute|laboratory|lab|center|centre)',
         r'^(department|school|faculty)\s*of\s',
@@ -634,21 +638,7 @@ def get_title_level(block):
         if re.match(pattern, title_text):
             return level
 
-    # Numeración decimal (más común en papers)
-    # Más restrictivo: requiere que después del número haya punto o texto
-    decimal_patterns = [
-        (r'^\d+\.\d+\.\d+\.\d+[\.\s]', 4),   # 1.2.3.4. o 1.2.3.4 texto
-        (r'^\d+\.\d+\.\d+[\.\s]', 3),         # 1.2.3. o 1.2.3 texto
-        (r'^\d+\.\d+[\.\s]', 2),               # 1.2. o 1.2 texto
-        (r'^\d+\.\s+[A-Z]', 1),                # 1. Texto (sección principal)
-        (r'^\d+\s+[A-Z]', 1),                  # 1 Texto (sin punto, también válido)
-    ]
-
-    for pattern, level in decimal_patterns:
-        if re.match(pattern, title_text):
-            return level
-
-    # Numeración romana (IEEE style)
+    # Numeración romana PRIMERO (IEEE style) - para que romanos tengan prioridad
     roman_patterns = [
         (r'^[IVX]+\.[A-Z]\.\d+', 3),      # II.A.1
         (r'^[IVX]+\.[A-Z]\.?[\s\.]', 2),  # II.A o II.A.
@@ -657,6 +647,22 @@ def get_title_level(block):
     ]
 
     for pattern, level in roman_patterns:
+        if re.match(pattern, title_text):
+            return level
+
+    # Numeración decimal - DESPUÉS de romanos
+    # Si hay romanos para secciones principales, los números solos son subsecciones
+    decimal_patterns = [
+        (r'^\d+\.\d+\.\d+\.\d+[\.\s]', 4),   # 1.2.3.4. o 1.2.3.4 texto
+        (r'^\d+\.\d+\.\d+[\.\s]', 3),         # 1.2.3. o 1.2.3 texto
+        (r'^\d+\.\d+[\.\s]', 2),               # 1.2. o 1.2 texto
+        # Números solos (1., 2., etc.) ahora son nivel 2 por defecto
+        # Papers con romanos usan números como subsecciones
+        (r'^\d+\.\s+[A-Z]', 2),                # 1. Texto -> nivel 2 (subsección)
+        (r'^\d+\s+[A-Z]', 2),                  # 1 Texto -> nivel 2 (subsección)
+    ]
+
+    for pattern, level in decimal_patterns:
         if re.match(pattern, title_text):
             return level
 
